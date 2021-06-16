@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+
+import readline
+import os
+import nazedb
+import nazetable
+import re
+
+
+class SimpleCompleter(object):
+    matches = []
+
+    def __init__(self, options):
+        self.options = sorted(options)
+        return
+
+    def complete(self, text, state):
+        response = None
+        if state == 0:
+            if text:
+                for s in self.options:
+                    if s and s.startswith(text):
+                        self.matches.append(s)
+            else:
+                self.matches = self.options[:]
+        try:
+            response = self.matches[state]
+        except IndexError:
+            response = None
+        return response
+
+
+class nazeCLI:
+    cmd = ('', '')
+    db = None
+    tables = []
+    rx_dict = {
+        'createtable': re.compile(r"createtable \s*(?P<tab>\w+)\s*\(\s*(?P<arg>(?P<args>\w+(\s*,\s*)?)+)\s*\)"),
+        'desc': re.compile(r'desc \s*(?P<tab>\w+)\s*'),
+        'dropdb': re.compile(r'dropdb.*'),
+        'droptable': re.compile(r'droptable \s*(?P<tab>\w+)\s*$'),
+        'insert': re.compile(r"insert \s*(?P<tab>\w+)\s*\(\s*(?P<arg>(?P<args>\w+(\s*,\s*)?)+)\s*\)"),
+        'listdb': re.compile(r'listdb.*'),
+        'listtable': re.compile(r'listtable.*'),
+        'opendb': re.compile(r'opendb\s+(?P<db>\w+)\s*'),
+        'showdb': re.compile(r'showdb.*'),
+        'showtable': re.compile(r'showtable \s*(?P<tab>\w+)\s*$'),
+        'stop': ''
+    }
+
+    def __parse_line(self, line):
+        try:
+            for key, rx in self.rx_dict.items():
+                match = rx.search(line)
+                if match:
+                    return key, match
+            return None, None
+        except:
+            return None, None
+
+    def refresh_table(self):
+        rx = re.compile(r'.\/(.*\/)*(?P<file>\w+).csv')
+        f = open(self.db.dbinfos.dbpath + '/' +
+                 self.db.dbinfos.dbfile, 'r')
+        lines = f.readlines()
+        self.tables = []
+        for line in lines:
+            match = rx.search(line)
+            if match:
+                self.tables.append(match.groupdict()['file'])
+
+    def setcmd(self, line):
+        self.cmd = self.__parse_line(line)
+
+    def listdb(self):
+        ldb = nazedb.NazeDB.listdb()
+        if len(ldb):
+            print("liste de DB")
+            print("-----------")
+            for dbinfo in ldb:
+                print(dbinfo.dbname)
+        else:
+            print("pas de DB")
+
+    def opendb(self):
+        dbinfos = self.cmd[1].groupdict()
+        self.db = nazedb.NazeDB(dbinfos['db'])
+        self.refresh_table()
+
+    def showdb(self):
+        if self.db != None:
+            print(self.db.dbinfos.dbname)
+        else:
+            print("pas de DB choisi")
+
+    def listtable(self):
+        if self.db != None:
+            l = len(self.tables)
+            if l > 0:
+                print('liste des tables')
+                print('----------------')
+                for table in self.tables:
+                    print(table)
+            else:
+                print("pas de table")
+        else:
+            print("pas de DB choisi")
+
+    def desc(self):
+        tabName = self.cmd[1].groupdict()['tab']
+        if self.db != None:
+            l = len(self.tables)
+            if l > 0:
+                print('liste de champ')
+                print('--------------')
+                for tab in self.tables:
+                    if tab == tabName:
+                        tab = nazetable.NazeTable(tabName, self.db)
+                        tab.load()
+                        for col in tab.get_header():
+                            print(col)
+            else:
+                print("pas de table")
+        else:
+            print("pas de DB choisi")
+
+    def showtable(self):
+        tabName = self.cmd[1].groupdict()['tab']
+        if self.db != None:
+            l = len(self.tables)
+            if l > 0:
+                print('liste de champ')
+                print('--------------')
+                for tab in self.tables:
+                    if tab == tabName:
+                        tab = nazetable.NazeTable(tabName, self.db)
+                        tab.load()
+                        cols = tab.get_header()
+                        rows = tab.get_rows
+                        lcols = len(cols)
+                        i = 0
+                        while i < lcols:
+                            print(cols[i], end='')
+                            if i != lcols - 1:
+                                print(' | ', end='')
+                            i += 1
+                        print('')
+                        for row in rows:
+                            i = 0
+                            for col, value in row.items():
+                                print(value, end='')
+                                if i != lcols - 1:
+                                    print(' | ', end='')
+                                i += 1
+                            print('')
+                        break
+            else:
+                print("pas de table")
+        else:
+            print("pas de DB choisi")
+
+    def insert(self):
+        args = self.cmd[1].groupdict()
+        if self.db != None:
+            for table in self.tables:
+                if table == args['tab']:
+                    tab = nazetable.NazeTable(args['tab'], self.db)
+                    tab.load()
+                    cols = tab.get_header()
+                    kw = {}
+                    i = 0
+                    l = len(cols)
+                    aargs = args['arg'].split(',')
+                    while i < l:
+                        kw[cols[i]] = aargs[i]
+                        i += 1
+                    tab.add_row(**kw)
+                    tab.save()
+                    break
+        else:
+            print("pas de DB choisi")
+
+    def createtable(self):
+        args = self.cmd[1].groupdict()
+        if self.db != None:
+            tab = nazetable.NazeTable(args['tab'], self.db)
+            cols = args['arg'].replace(' ', '').split(',')
+            tab.set_header(cols)
+            tab.save()
+            self.refresh_table()
+        else:
+            print("pas de DB choisi")
+
+    def droptable(self):
+        args = self.cmd[1].groupdict()
+        if self.db != None:
+            tab = nazetable.NazeTable(args['tab'], self.db)
+            tab.clean()
+            self.refresh_table()
+        else:
+            print("pas de DB choisi")
+
+    def dropdb(self):
+        nazetable.NazeTable.cleanall(self.db.dbinfos)
+        self.db = None
+        self.tables = []
+
+    def exec(self):
+        if self.cmd[0] != None:
+            if self.cmd[0] == 'listdb':
+                self.listdb()
+            elif self.cmd[0] == 'opendb':
+                self.opendb()
+            elif self.cmd[0] == 'showdb':
+                self.showdb()
+            elif self.cmd[0] == 'listtable':
+                self.listtable()
+            elif self.cmd[0] == 'desc':
+                self.desc()
+            elif self.cmd[0] == 'showtable':
+                self.showtable()
+            elif self.cmd[0] == 'insert':
+                self.insert()
+            elif self.cmd[0] == 'createtable':
+                self.createtable()
+            elif self.cmd[0] == 'droptable':
+                self.droptable()
+            elif self.cmd[0] == 'dropdb':
+                self.dropdb()
+
+
+readline.set_completer(SimpleCompleter(list(nazeCLI.rx_dict.keys())).complete)
+readline.parse_and_bind('tab: complete')
+line = ''
+cli = nazeCLI()
+while line != 'stop':
+    line = input('NazeDBCLI ("stop" to quit): ')
+    cli.setcmd(line)
+    cli.exec()
